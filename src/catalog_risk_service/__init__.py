@@ -1,0 +1,1 @@
+"""Competitor catalog risk decisions."""
