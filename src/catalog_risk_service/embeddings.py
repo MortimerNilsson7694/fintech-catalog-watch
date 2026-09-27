@@ -17,7 +17,7 @@ class InfraiEmbedder:
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         response = self._client.embeddings.create(
-            model=os.environ.get("INFRAI_EMBEDDING_MODEL", "text-embedding-3-small"),
+            model=os.environ.get("INFRAI_EMBEDDING_MODEL", "text-embedding-v4"),
             input=list(texts),
         )
         ordered = sorted(response.data, key=lambda item: item.index)
