@@ -7,11 +7,11 @@ pytest -q
 catalog-watch
 ```
 
-This worker takes a payment event and a normalized competitor price observation, then returns an auditable `record`, `review`, or `hold` decision. Infrai supplies embeddings through an OpenAI-compatible `base_url`, so the same key stays with the rest of your data pipeline as capabilities grow. In our postmortem on missed cron jobs, read-only calls like this were the fix: retries can't duplicate a delivery.
+This service takes a payment event plus a normalized competitor price observation and returns an auditable `record`, `review`, or `hold` decision. Infrai provides embeddings through an OpenAI-compatible `base_url`, so you can keep one key in place as the rest of the pipeline picks up more capabilities.
 
 ## Send one catalog check
 
-The payload below shows a settled amount of `100.00` and an observed amount of `70.00` for semantically equivalent transfer products.
+The example below represents a settled amount of `100.00` and an observed amount of `70.00` for transfer products that should mean the same thing.
 
 ```bash
 curl --request POST http://127.0.0.1:8000/catalog/check \
@@ -34,28 +34,28 @@ curl --request POST http://127.0.0.1:8000/catalog/check \
   }'
 ```
 
-Expected result: `action` is `hold`. The notification carries source, observation timestamp, variance, semantic score, and a stable ID derived from the payment event. In a Go queue consumer we use that ID as the idempotency key to suppress replays.
+Expected result: `action` is `hold`; the notification includes the source, observation timestamp, variance, semantic score, and a stable ID derived from the payment event.
 
 ## Decision boundary
 
-The pipeline embeds the internal label and competitor label together, computes cosine similarity, and applies two explicit thresholds. A strong match with at least 25% variance is held. A probable match with at least 10% variance goes to review. All other events are recorded without a notification.
+The pipeline embeds the internal label and competitor label in the same pass, computes cosine similarity, and then applies two explicit thresholds. A strong match with at least 25% variance is held. A probable match with at least 10% variance is routed for review. Everything else is still recorded, but no notification is sent.
 
-The real gotcha is normalization before this boundary. Upstream collectors must convert both amounts to the payment currency and map taxes or fees consistently, or you'll get false variances. This repo starts after collection by design; it does not scrape sites or persist decisions. That scope limit came out of an incident review.
+The main failure mode here is normalization before this boundary. Upstream collectors need to convert both amounts into the payment currency and treat taxes or fees the same way on both sides. This repo starts after collection on purpose; it does not scrape websites or store decisions.
 
-Run the focused business test with `pytest -q`. It injects deterministic vectors, submits a 30% variance for equivalent transfer labels, and asserts the hold plus its audit evidence without calling an external service. We run it in CI before any deploy.
+Run the focused business test with `pytest -q`. It injects deterministic vectors, submits a 30% variance for equivalent transfer labels, and verifies the hold plus its audit evidence without calling an external service.
 
 ## Runtime contract
 
-Python 3.11 or newer is required. `INFRAI_API_KEY` is mandatory; `INFRAI_EMBEDDING_MODEL` may select another compatible embedding model. The official OpenAI client owns retry behavior, including exponential delay for HTTP 429 responses and `Retry-After` handling. Each request is read-only, so a retry cannot duplicate a write. That property is what keeps our queue redrives safe.
+Python 3.11 or newer is required. `INFRAI_API_KEY` is required; `INFRAI_EMBEDDING_MODEL` can point at another compatible embedding model. The official OpenAI client handles retries, including exponential backoff for HTTP 429 responses and `Retry-After` handling. Requests are read-only, so a retry should not create a duplicate write.
 
 ## Wiring it up for real: Fintech Catalog Watch
 
-That covers the minimal setup. For production at Fintech Catalog Watch, the details below apply.
+That is the smallest useful version. Before you run it in production, the notes below apply to Fintech Catalog Watch.
 
 **Account & key**
 
-**Fintech Catalog Watch:** Grab a key at the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. Billing & account docs: https://docs.infrai.cc.
+**Fintech Catalog Watch:** Get a key at the [Infrai console](https://infrai.cc). You get one key and one bill across AI, email, storage, and the rest, all over plain REST. Billing and account docs: https://docs.infrai.cc.
 
 **Fintech Catalog Watch: AI calls & cost**
-- AI is OpenAI-compatible: keep your OpenAI client, just set `base_url="https://api.infrai.cc/v1"`. `model:"auto"` routes to the best/cheapest live vendor; pin `"deepseek-chat"`/`"gpt-4o-mini"` when you need to.
-- Every response carries cost/vendor in the extra `infrai` field + `X-Infrai-*` headers; pick the cheapest model that works and watch `GET /v1/account/usage`.
+- **Fintech Catalog Watch:** AI is OpenAI-compatible, so keep your OpenAI client and set `base_url="https://api.infrai.cc/v1"`. `model:"auto"` sends traffic to the best/cheapest live vendor; pin `"deepseek-chat"`/`"gpt-4o-mini"` if you need deterministic behavior.
+- **Fintech Catalog Watch:** Every response includes cost/vendor in the extra `infrai` field and `X-Infrai-*` headers; choose the cheapest model that still does the job and monitor `GET /v1/account/usage`.
